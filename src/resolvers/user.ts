@@ -8,6 +8,7 @@ import {
   ObjectType,
   Resolver,
 } from 'type-graphql'
+import { PG_UNIQUE_CONSTRAINT_VIOLATION } from '../constants'
 import { MyContext } from '../types'
 import { User } from '../entities/User'
 
@@ -40,18 +41,61 @@ class UserResponse {
 
 @Resolver()
 export class UserResolver {
-  @Mutation(() => User)
+  @Mutation(() => UserResponse)
   async register(
     @Arg('options') options: UserNamePasswordInput,
     @Ctx() { em }: MyContext
-  ) {
+  ): Promise<UserResponse> {
+    const errors: FieldError[] = []
+
+    if (options.username.length <= 2) {
+      errors.push({
+        field: 'username',
+        message: 'Length must be greater than 2.',
+      })
+    }
+
+    if (options.password.length <= 3) {
+      errors.push({
+        field: 'password',
+        message: 'Length must be greater than 3.',
+      })
+    }
+
+    if (errors.length) return { errors }
+
     const user = em.create(User, {
       username: options.username,
       password: await argon.hash(options.password),
     })
-    await em.persistAndFlush(user)
 
-    return user
+    try {
+      await em.persistAndFlush(user)
+    } catch (e) {
+      if (e.code === PG_UNIQUE_CONSTRAINT_VIOLATION) {
+        if (e.constraint === 'user_username_unique') {
+          errors.push({
+            field: 'username',
+            message: 'Username already taken',
+          })
+        }
+      }
+
+      /*
+      if (e instanceof UniqueConstraintViolationException) {
+        const constraint = ((e as unknown) as {
+          constraint: string
+        }).constraint
+
+        if (constraint === 'user_username_unique') {
+        }
+      }
+      */
+    }
+
+    if (errors.length) return { errors }
+
+    return { user }
   }
 
   @Mutation(() => UserResponse)
